@@ -1,0 +1,4 @@
+.hypothesis/
+.rdkit_tools/__pycache__/
+__pycache__/
+.vscode/
