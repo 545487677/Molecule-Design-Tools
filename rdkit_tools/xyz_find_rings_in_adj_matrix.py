@@ -7,7 +7,6 @@ from rdkit.Chem import Draw
 from openbabel import openbabel
 from xyz_to_smiles import read_xyz_file, geom_to_smi_and_bonds
 from xyz_adj_matrix import construct_adjacency_matrix
-import matplotlib.pyplot as plt
 
 
 def find_ring_atoms_in_adj_matrix(mol: Chem.Mol, adjacency_matrix: np.ndarray) -> np.ndarray:

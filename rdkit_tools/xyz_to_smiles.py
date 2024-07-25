@@ -1,6 +1,7 @@
 import sys
 from typing import List, Tuple
 from rdkit import Chem
+from rdkit.Chem import AllChem
 from openbabel import openbabel
 
 def read_xyz_file(file_path: str) -> Tuple[List[str], List[List[float]]]:
@@ -50,25 +51,31 @@ def geom_to_smi_and_bonds(atoms: List[str], coords: List[List[float]]) -> Tuple[
     mol.AddHydrogens()
     ob_conversion = openbabel.OBConversion()
     ob_conversion.SetOutFormat('smi')
+
+    # obtain the bonds infor 
+    bonds = []; bonds_symbol = []
+    for bond in openbabel.OBMolBondIter(mol):
+        bond_order = bond.GetBondOrder()
+        atom_0 = bond.GetBeginAtom().GetIdx() - 1
+        atom_1 = bond.GetEndAtom().GetIdx() - 1
+        bonds.append([atom_0, atom_1, bond_order])
+        bonds_symbol.append([atoms[atom_0], atoms[atom_1], bond_order])
     smi = ob_conversion.WriteString(mol).strip()
-    rdkit_mol = Chem.MolFromSmiles(smi)
-    if rdkit_mol is None:
-        raise ValueError("Invalid SMILES string generated.")
+    rdkit_mol = Chem.RWMol()
+    for ii in range(len(atoms)):
+        rdkit_mol.AddAtom(Chem.Atom(atoms[ii]))
+    for bond in bonds:
+        if bond[-1] == 1:
+            rdkit_mol.AddBond(bond[0], bond[1], Chem.BondType.SINGLE)
+        elif bond[-1] == 2:
+            rdkit_mol.AddBond(bond[0], bond[1], Chem.BondType.DOUBLE)
+        elif bond[-1] == 3:
+            rdkit_mol.AddBond(bond[0], bond[1], Chem.BondType.TRIPLE)
+        else:
+            rdkit_mol.AddBond(bond[0], bond[1], Chem.BondType.AROMATIC)
 
-    # Add explicit hydrogens to the RDKit molecule
-    rdkit_mol = Chem.AddHs(rdkit_mol)
-
-    bonds = []
-    bonds_symbol = []
-    for bond in rdkit_mol.GetBonds():
-        idx_0 = bond.GetBeginAtomIdx()
-        idx_1 = bond.GetEndAtomIdx()
-        atom_0 = rdkit_mol.GetAtomWithIdx(idx_0).GetSymbol()
-        atom_1 = rdkit_mol.GetAtomWithIdx(idx_1).GetSymbol()
-        bond_type = bond.GetBondType()
-        bonds.append([idx_0, idx_1, int(bond_type)])
-        bonds_symbol.append([atom_0, atom_1, int(bond_type)])
-
+    AllChem.Compute2DCoords(rdkit_mol)
+    Chem.SanitizeMol(rdkit_mol)
     return bonds, smi, rdkit_mol, bonds_symbol
 
 # Usage example
