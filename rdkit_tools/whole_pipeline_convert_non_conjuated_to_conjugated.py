@@ -259,7 +259,7 @@ def calculate_new_hydrogen_position(base_coord: Tuple[float, float, float], neig
     
     return tuple(new_h_position)
 
-def identify_hydrogens_to_remove(rings_info: List[Dict]) -> List[int]:
+def identify_hydrogens_to_remove(rings_info: List[Dict], all_ring_atoms: set) -> List[int]:
     """
     Identify hydrogens to remove from non-conjugated rings.
 
@@ -268,6 +268,7 @@ def identify_hydrogens_to_remove(rings_info: List[Dict]) -> List[int]:
     """
     hydrogens_to_remove = []
     hydrogens_to_add = []
+    extra_carbons_to_remove = []
 
     for ring in rings_info:
         if not is_conjugated_ring(ring):
@@ -280,6 +281,10 @@ def identify_hydrogens_to_remove(rings_info: List[Dict]) -> List[int]:
                     if hydrogen_indices:
                         hydrogen_idx = random.choice(hydrogen_indices)
                         hydrogens_to_remove.append(hydrogen_idx)
+                    carbon_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'C']
+                    non_ring_carbons = [carbon_idx for carbon_idx in carbon_indices if carbon_idx not in all_ring_atoms]
+                    if non_ring_carbons:
+                        extra_carbons_to_remove.append(random.choice(non_ring_carbons))
 
                 elif symbol in {'O', 'S'} and len(connected_symbols) == 3:
                     hydrogen_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'H']
@@ -291,7 +296,9 @@ def identify_hydrogens_to_remove(rings_info: List[Dict]) -> List[int]:
                     # Add hydrogen to N or B in the ring
                     hydrogens_to_add.append((idx, connected_indices.tolist()))
 
-    return hydrogens_to_remove, hydrogens_to_add
+
+
+    return hydrogens_to_remove, hydrogens_to_add, extra_carbons_to_remove
 
 def add_hydrogens_to_atoms_coords(atoms: List[str], coords: List[Tuple[float, float, float]], hydrogens_to_add: List[int]) -> Tuple[List[str], List[Tuple[float, float, float]]]:
     new_atoms = atoms[:]
@@ -349,7 +356,42 @@ def visualize_molecules(mol: Chem.Mol, file_name: str):
     # Save the image
     img.save(file_name)
 
-def process_molecule(atoms: List[str], coords: List[Tuple[float, float, float]], output_sdf_filename: str, output_png_filename: str, remove_h: bool = False, add_h: bool = False) -> Chem.Mol:
+def remove_atoms_from_atoms_coords(atoms: List[str], coords: List[Tuple[float, float, float]], atoms_to_remove: List[int]) -> Tuple[List[str], List[Tuple[float, float, float]]]:
+    """
+    Remove specified atoms from the atoms and coords lists.
+
+    :param atoms: List of atom symbols.
+    :param coords: List of atom coordinates.
+    :param atoms_to_remove: List of atom indices to remove.
+    :return: Tuple of modified atoms and coords lists.
+    """
+    atoms = [atom for i, atom in enumerate(atoms) if i not in atoms_to_remove]
+    coords = [coord for i, coord in enumerate(coords) if i not in atoms_to_remove]
+    assert len(atoms) == len(coords)
+    return atoms, np.array(coords)
+
+def remove_isolated_hydrogens(mol: Chem.Mol) -> Chem.Mol:
+    """
+    Remove isolated hydrogen atoms from a molecule.
+
+    :param mol: An RDKit molecule object.
+    :return: A new RDKit molecule object with isolated hydrogens removed.
+    """
+    mol = Chem.RWMol(mol)
+    atoms_to_remove = []
+
+    for atom in mol.GetAtoms():
+        if atom.GetSymbol() == 'H':
+            neighbors = atom.GetNeighbors()
+            if len(neighbors) == 0:
+                atoms_to_remove.append(atom.GetIdx())
+
+    for idx in sorted(atoms_to_remove, reverse=True):
+        mol.RemoveAtom(idx)
+
+    return mol
+
+def process_molecule(atoms: List[str], coords: List[Tuple[float, float, float]], output_sdf_filename: str, output_png_filename: str, remove_h: bool = False, add_h: bool = False, remove_carbon: bool = False) -> Chem.Mol:
     """
     Process the molecule to remove and/or add hydrogens and generate the corresponding SDF and PNG files.
 
@@ -370,7 +412,9 @@ def process_molecule(atoms: List[str], coords: List[Tuple[float, float, float]],
     print("Rings info: length", len(rings_info))
     conjugated_rings = []
     non_conjugated_rings = []
+    all_ring_atoms = set()
     for ring in rings_info:
+        all_ring_atoms.update(ring['atom_indices'])
         if is_conjugated_ring(ring):
             conjugated_rings.append(ring)
         else:
@@ -378,19 +422,25 @@ def process_molecule(atoms: List[str], coords: List[Tuple[float, float, float]],
     print("conjugated_rings: ",len(conjugated_rings))
     print("non conjugated_rings:", len(non_conjugated_rings))
     # Identify hydrogens to remove
-    hydrogens_to_remove, hydrogens_to_add = identify_hydrogens_to_remove(non_conjugated_rings)
+
+    hydrogens_to_remove, hydrogens_to_add, extra_carbons_to_remove = identify_hydrogens_to_remove(non_conjugated_rings, all_ring_atoms)
     if remove_h:
         print("remove H: ", hydrogens_to_remove)
         atoms, coords = remove_hydrogens_from_atoms_coords(atoms, coords, hydrogens_to_remove)
     if add_h:
         print("add H: ", hydrogens_to_add)
         atoms, coords = add_hydrogens_to_atoms_coords(atoms, coords, hydrogens_to_add)
+    if remove_carbon:
+        print("remove C: ", extra_carbons_to_remove)
+        atoms, coords = remove_atoms_from_atoms_coords(atoms, coords, extra_carbons_to_remove)
 
     smi = xyz2smi(atoms, coords)
     mol = Chem.MolFromSmiles(smi)
+    mol = remove_isolated_hydrogens(mol)
     mol = Chem.AddHs(mol)
     AllChem.EmbedMolecule(mol)
     AllChem.MMFFOptimizeMolecule(mol)
+
 
     writer = Chem.SDWriter(output_sdf_filename)
     writer.write(mol)
@@ -430,3 +480,5 @@ if __name__ == "__main__":
     process_molecule(atoms, coords, sdf_output_path, final_png, add_h=True)
     
     # remove ch4
+    atoms, coords = read_sdf_file(sdf_output_path)
+    process_molecule(atoms, coords, sdf_output_path, final_png, remove_carbon=True)
