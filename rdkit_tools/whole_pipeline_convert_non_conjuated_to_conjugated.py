@@ -1,4 +1,4 @@
-import sys
+import sys, os
 import numpy as np
 import random
 from typing import List, Tuple, Dict
@@ -117,6 +117,28 @@ def read_xyz_file(file_path: str) -> Tuple[List[str], List[List[float]]]:
 
     return atoms, coords
 
+def read_sdf_file(filename):
+    coords = []
+    elements = []
+    
+    with open(filename, 'r') as file:
+        lines = file.readlines()
+        start_reading = False
+        for line in lines:
+            if 'V2000' in line:
+                start_reading = True
+                continue
+            
+            if start_reading:
+                parts = line.split()
+                if len(parts) >= 5 and parts[4] == '0':
+                    x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
+                    element = parts[3]
+                    coords.append((x, y, z))
+                    elements.append(element)
+    
+    return elements, coords
+
 def geom_to_smi_and_bonds(atoms: List[str], coords: List[List[float]]) -> Tuple[List[List[int]], str]:
     """
     Converts a list of atomic symbols and their coordinates to SMILES format and extracts bond orders.
@@ -211,6 +233,32 @@ def xyz2smi(atoms: list[str], coords: list[list[float]]) -> str:
 
     return smi.split('\t\n')[0]
 
+def calculate_new_hydrogen_position(base_coord: Tuple[float, float, float], neighbor_coords: List[Tuple[float, float, float]]) -> Tuple[float, float, float]:
+    """
+    Calculate the position of a new hydrogen atom based on the base atom and its two neighbors.
+    
+    This function ensures that the new hydrogen atom lies in the opposite direction of the plane
+    defined by the base atom and its neighbors.
+    """
+    base_coord = np.array(base_coord)
+    neighbor_coords = np.array(neighbor_coords)
+    
+    # Calculate vectors from base atom to neighbors
+    vec1 = neighbor_coords[0] - base_coord
+    vec2 = neighbor_coords[1] - base_coord
+    
+    # Calculate the average direction vector (in-plane vector)
+    vec_avg = (vec1 + vec2)
+    
+    # Normalize the average vector to get the direction and invert it to get the opposite direction
+    vec_avg_norm = -vec_avg / np.linalg.norm(vec_avg)
+    
+    # Calculate the position of the new hydrogen atom
+    bond_length = 1.1  # Typical bond length for C-H, N-H, etc.
+    new_h_position = base_coord + vec_avg_norm * bond_length
+    
+    return tuple(new_h_position)
+
 def identify_hydrogens_to_remove(rings_info: List[Dict]) -> List[int]:
     """
     Identify hydrogens to remove from non-conjugated rings.
@@ -219,6 +267,7 @@ def identify_hydrogens_to_remove(rings_info: List[Dict]) -> List[int]:
     :return: List of hydrogen atom indices to remove.
     """
     hydrogens_to_remove = []
+    hydrogens_to_add = []
 
     for ring in rings_info:
         if not is_conjugated_ring(ring):
@@ -238,7 +287,23 @@ def identify_hydrogens_to_remove(rings_info: List[Dict]) -> List[int]:
                         hydrogen_idx = random.choice(hydrogen_indices)
                         hydrogens_to_remove.append(hydrogen_idx)
 
-    return hydrogens_to_remove
+                elif symbol in {'N', 'B'} and len(connected_symbols) == 2:
+                    # Add hydrogen to N or B in the ring
+                    hydrogens_to_add.append((idx, connected_indices.tolist()))
+
+    return hydrogens_to_remove, hydrogens_to_add
+
+def add_hydrogens_to_atoms_coords(atoms: List[str], coords: List[Tuple[float, float, float]], hydrogens_to_add: List[int]) -> Tuple[List[str], List[Tuple[float, float, float]]]:
+    new_atoms = atoms[:]
+    new_coords = list(coords)
+    
+    for idx, neighbor_indices in hydrogens_to_add:
+        neighbor_coords = [coords[i] for i in neighbor_indices]
+        new_h_coord = calculate_new_hydrogen_position(coords[idx], neighbor_coords)
+        new_atoms.append('H')
+        new_coords.append(new_h_coord)
+
+    return new_atoms, np.array(new_coords)
 
 def remove_hydrogens_from_atoms_coords(atoms: List[str], coords: List[Tuple[float, float, float]], hydrogens_to_remove: List[int]) -> Tuple[List[str], List[Tuple[float, float, float]]]:
     """
@@ -284,52 +349,84 @@ def visualize_molecules(mol: Chem.Mol, file_name: str):
     # Save the image
     img.save(file_name)
 
+def process_molecule(atoms: List[str], coords: List[Tuple[float, float, float]], output_sdf_filename: str, output_png_filename: str, remove_h: bool = False, add_h: bool = False) -> Chem.Mol:
+    """
+    Process the molecule to remove and/or add hydrogens and generate the corresponding SDF and PNG files.
 
-
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python whole_pipeline_convert_non_conjuated_to_conjugated.py <path_to_xyz_file>")
-        sys.exit(1)
-    
-    xyz_file_path = sys.argv[1]
-    atoms, coords = read_xyz_file(xyz_file_path)
+    :param atoms: List of atomic symbols.
+    :param coords: List of atomic coordinates.
+    :param output_sdf_filename: The filename for the output SDF file.
+    :param output_png_filename: The filename for the output PNG file.
+    :param remove_h: Flag to indicate if hydrogens should be removed.
+    :param add_h: Flag to indicate if hydrogens should be added.
+    :return: The processed RDKit molecule object.
+    """
     bonds, smiles, rdkit_mol, bonds_symbol = geom_to_smi_and_bonds(atoms, coords)
-    # visualize_molecule(rdkit_mol, "rdkit_tools/example/origin_mol.png")
-
     num_atoms = len(atoms)
     adjacency_matrix = construct_adjacency_matrix(bonds, num_atoms)
     assert len(adjacency_matrix) == num_atoms
-    print(adjacency_matrix.shape)
-    print(adjacency_matrix)
+
     rings_info = find_ring_atoms_in_adj_matrix(rdkit_mol, adjacency_matrix)
-    
-    for ring in rings_info:
-        print(ring)
-    
+    print("Rings info: length", len(rings_info))
     conjugated_rings = []
     non_conjugated_rings = []
     for ring in rings_info:
         if is_conjugated_ring(ring):
             conjugated_rings.append(ring)
-            print("Conjugated ring found:")
         else:
             non_conjugated_rings.append(ring)
-            print("Non-conjugated ring found:")
-        print(ring)
-    
+    print("conjugated_rings: ",len(conjugated_rings))
+    print("non conjugated_rings:", len(non_conjugated_rings))
     # Identify hydrogens to remove
-    hydrogens_to_remove = identify_hydrogens_to_remove(non_conjugated_rings)
-    print(f"Hydrogens to remove: {hydrogens_to_remove}")
-
-    atoms, coords = remove_hydrogens_from_atoms_coords(atoms, coords, hydrogens_to_remove)
+    hydrogens_to_remove, hydrogens_to_add = identify_hydrogens_to_remove(non_conjugated_rings)
+    if remove_h:
+        print("remove H: ", hydrogens_to_remove)
+        atoms, coords = remove_hydrogens_from_atoms_coords(atoms, coords, hydrogens_to_remove)
+    if add_h:
+        print("add H: ", hydrogens_to_add)
+        atoms, coords = add_hydrogens_to_atoms_coords(atoms, coords, hydrogens_to_add)
 
     smi = xyz2smi(atoms, coords)
     mol = Chem.MolFromSmiles(smi)
     mol = Chem.AddHs(mol)
     AllChem.EmbedMolecule(mol)
     AllChem.MMFFOptimizeMolecule(mol)
-    sdf_filename = 'rdkit_tools/example/conjugated_molecule.sdf'
-    writer = Chem.SDWriter(sdf_filename)
+
+    writer = Chem.SDWriter(output_sdf_filename)
     writer.write(mol)
     writer.close()
-    print(f"分子结构已保存为 {sdf_filename}")
+        
+    supplier = Chem.SDMolSupplier(output_sdf_filename)
+    mol = supplier[0]
+    visualize_molecules(mol, output_png_filename)
+    return mol
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage: python whole_pipeline_convert_non_conjuated_to_conjugated.py <path_to_xyz_or_sdf_file> <output_sdf_file>")
+        sys.exit(1)
+    
+    file_path = sys.argv[1]
+    sdf_output_path = sys.argv[2]
+
+    if file_path.endswith('.xyz'):
+        atoms, coords = read_xyz_file(file_path)
+    elif file_path.endswith('.sdf'):
+        atoms, coords = read_sdf_file(file_path)
+    else:
+        print("Unsupported file format. Please provide an XYZ or SDF file.")
+        sys.exit(1)
+
+    intermediate_png = os.path.join(os.path.dirname(sdf_output_path), 'intermediate_conjugated_molecule.png')
+    final_png = os.path.join(os.path.dirname(sdf_output_path), 'final_conjugated_molecule.png')
+
+    # remove h
+    # First process: from input file to intermediate SDF
+    process_molecule(atoms, coords, sdf_output_path, intermediate_png, remove_h=True)
+
+    # add h
+    # Second process: from intermediate SDF to final SDF
+    atoms, coords = read_sdf_file(sdf_output_path)
+    process_molecule(atoms, coords, sdf_output_path, final_png, add_h=True)
+    
+    # remove ch4
