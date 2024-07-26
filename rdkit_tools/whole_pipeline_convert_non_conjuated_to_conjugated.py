@@ -276,7 +276,7 @@ def identify_hydrogens_to_remove(rings_info: List[Dict], all_ring_atoms: set) ->
                 connected_indices = np.nonzero(ring['adjacency_rows'][ring['atom_indices'].index(idx)])[0]
                 connected_symbols = ring['adjacency_symbols'][idx]
 
-                if symbol in {'C', 'B', 'N', 'Si'} and len(connected_symbols) == 4:
+                if symbol in {'C', 'B', 'Si'} and len(connected_symbols) == 4:
                     hydrogen_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'H']
                     if hydrogen_indices:
                         hydrogen_idx = random.choice(hydrogen_indices)
@@ -292,9 +292,9 @@ def identify_hydrogens_to_remove(rings_info: List[Dict], all_ring_atoms: set) ->
                         hydrogen_idx = random.choice(hydrogen_indices)
                         hydrogens_to_remove.append(hydrogen_idx)
 
-                elif symbol in {'N', 'B'} and len(connected_symbols) == 2:
-                    # Add hydrogen to N or B in the ring
-                    hydrogens_to_add.append((idx, connected_indices.tolist()))
+                # elif symbol in {'N', 'B'} and len(connected_symbols) == 2:
+                #     # Add hydrogen to N or B in the ring
+                #     hydrogens_to_add.append((idx, connected_indices.tolist()))
 
 
 
