@@ -292,9 +292,23 @@ def identify_hydrogens_to_remove(rings_info: List[Dict], all_ring_atoms: set) ->
                         hydrogen_idx = random.choice(hydrogen_indices)
                         hydrogens_to_remove.append(hydrogen_idx)
 
-                # elif symbol in {'N', 'B'} and len(connected_symbols) == 2:
-                #     # Add hydrogen to N or B in the ring
-                #     hydrogens_to_add.append((idx, connected_indices.tolist()))
+                elif symbol == 'N':
+                    total_bond_order = sum(ring['adjacency_rows'][ring['atom_indices'].index(idx)])
+                    hydrogen_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'H']
+                    if len(connected_symbols) == 4 and hydrogen_indices:
+                        hydrogen_idx = random.choice(hydrogen_indices)
+                        hydrogens_to_remove.append(hydrogen_idx)
+                    elif total_bond_order == 3:
+                        # Do nothing if total bond order is 3
+                        pass
+                    elif total_bond_order == 2:
+                        # Add hydrogen to N in the ring
+                        hydrogens_to_add.append((idx, connected_indices.tolist()))
+
+
+                elif symbol in {'B'} and len(connected_symbols) == 2:
+                    # Add hydrogen to N or B in the ring
+                    hydrogens_to_add.append((idx, connected_indices.tolist()))
 
 
 
@@ -391,6 +405,24 @@ def remove_isolated_hydrogens(mol: Chem.Mol) -> Chem.Mol:
 
     return mol
 
+def post_process(atoms: List[str], coords: List[Tuple[float, float, float]], output_sdf_filename: str, output_png_filename: str):
+    smi = xyz2smi(atoms, coords)
+    mol = Chem.MolFromSmiles(smi)
+    mol = remove_isolated_hydrogens(mol)
+    mol = Chem.AddHs(mol)
+    AllChem.EmbedMolecule(mol)
+    AllChem.MMFFOptimizeMolecule(mol)
+
+
+    writer = Chem.SDWriter(output_sdf_filename)
+    writer.write(mol)
+    writer.close()
+        
+    supplier = Chem.SDMolSupplier(output_sdf_filename)
+    mol = supplier[0]
+    visualize_molecules(mol, output_png_filename)
+    return mol
+
 def process_molecule(atoms: List[str], coords: List[Tuple[float, float, float]], output_sdf_filename: str, output_png_filename: str, remove_h: bool = False, add_h: bool = False, remove_carbon: bool = False) -> Chem.Mol:
     """
     Process the molecule to remove and/or add hydrogens and generate the corresponding SDF and PNG files.
@@ -424,32 +456,20 @@ def process_molecule(atoms: List[str], coords: List[Tuple[float, float, float]],
     # Identify hydrogens to remove
 
     hydrogens_to_remove, hydrogens_to_add, extra_carbons_to_remove = identify_hydrogens_to_remove(non_conjugated_rings, all_ring_atoms)
-    if remove_h:
+    if remove_h and len(hydrogens_to_remove) > 0:
         print("remove H: ", hydrogens_to_remove)
         atoms, coords = remove_hydrogens_from_atoms_coords(atoms, coords, hydrogens_to_remove)
-    if add_h:
+        post_process(atoms, coords, output_sdf_filename, output_png_filename)
+    if add_h and len(hydrogens_to_add) > 0:
         print("add H: ", hydrogens_to_add)
         atoms, coords = add_hydrogens_to_atoms_coords(atoms, coords, hydrogens_to_add)
-    if remove_carbon:
+        post_process(atoms, coords, output_sdf_filename, output_png_filename)
+    if remove_carbon and len(extra_carbons_to_remove) > 0:
         print("remove C: ", extra_carbons_to_remove)
         atoms, coords = remove_atoms_from_atoms_coords(atoms, coords, extra_carbons_to_remove)
-
-    smi = xyz2smi(atoms, coords)
-    mol = Chem.MolFromSmiles(smi)
-    mol = remove_isolated_hydrogens(mol)
-    mol = Chem.AddHs(mol)
-    AllChem.EmbedMolecule(mol)
-    AllChem.MMFFOptimizeMolecule(mol)
+        post_process(atoms, coords, output_sdf_filename, output_png_filename)
 
 
-    writer = Chem.SDWriter(output_sdf_filename)
-    writer.write(mol)
-    writer.close()
-        
-    supplier = Chem.SDMolSupplier(output_sdf_filename)
-    mol = supplier[0]
-    visualize_molecules(mol, output_png_filename)
-    return mol
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
