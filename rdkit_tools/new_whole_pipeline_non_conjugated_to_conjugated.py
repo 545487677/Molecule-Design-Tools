@@ -11,6 +11,7 @@ def is_conjugated_ring(ring):
     conjugated_elements_3 = {'C', 'B', 'N', 'Si'}
     conjugated_elements_2 = {'O', 'S'}
     
+    carbon_with_four_bonds_count = 0 
     for atom_index in ring['atom_indices']:
         atom_symbol = ring['atom_symbols'][ring['atom_indices'].index(atom_index)]
         adjacency_symbols = ring['adjacency_symbols'][atom_index]
@@ -19,6 +20,10 @@ def is_conjugated_ring(ring):
             continue
         elif atom_symbol in conjugated_elements_2 and len(adjacency_symbols) == 2:
             continue
+        elif atom_symbol == 'C' and len(adjacency_symbols) == 4 and len(ring['atom_indices']) == 5:
+            carbon_with_four_bonds_count += 1
+            if carbon_with_four_bonds_count > 1:
+                return False
         else:
             return False
     return True
@@ -259,12 +264,14 @@ def calculate_new_hydrogen_position(base_coord: Tuple[float, float, float], neig
     
     return tuple(new_h_position)
 
-def identify_hydrogens_to_remove(rings_info: List[Dict], all_ring_atoms: set) -> List[int]:
+
+def identify_hydrogens_to_remove(rings_info: List[Dict], all_ring_atoms: set) -> Tuple[List[int], List[Tuple[int, List[int]]], List[int]]:
     """
     Identify hydrogens to remove from non-conjugated rings.
 
     :param rings_info: List of dictionaries containing ring information.
-    :return: List of hydrogen atom indices to remove.
+    :param all_ring_atoms: Set of all ring atoms in the molecule.
+    :return: Tuple containing lists of hydrogen atom indices to remove, atoms to add hydrogen to, and extra carbons to remove.
     """
     hydrogens_to_remove = []
     hydrogens_to_add = []
@@ -272,30 +279,51 @@ def identify_hydrogens_to_remove(rings_info: List[Dict], all_ring_atoms: set) ->
 
     for ring in rings_info:
         if not is_conjugated_ring(ring):
+            carbon_with_four_bonds_count = 0  # Track the number of C atoms with four bonds in a five-membered ring
             for idx, symbol in zip(ring['atom_indices'], ring['atom_symbols']):
                 connected_indices = np.nonzero(ring['adjacency_rows'][ring['atom_indices'].index(idx)])[0]
                 connected_symbols = ring['adjacency_symbols'][idx]
 
-                if symbol in {'C', 'B', 'Si'} and len(connected_symbols) == 4:
-                    hydrogen_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'H']
-                    if hydrogen_indices:
-                        hydrogen_idx = random.choice(hydrogen_indices)
-                        hydrogens_to_remove.append(hydrogen_idx)
-                    carbon_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'C']
-                    non_ring_carbons = [carbon_idx for carbon_idx in carbon_indices if carbon_idx not in all_ring_atoms]
-                    if non_ring_carbons:
-                        extra_carbons_to_remove.append(random.choice(non_ring_carbons))
+                # Rules for C & Si
+                if symbol in {'C', 'Si'}:
+                    if len(ring['atom_indices']) == 6:  # Six-membered ring
+                        if len(connected_symbols) == 4:
+                            hydrogen_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'H']
+                            if hydrogen_indices:
+                                hydrogen_idx = random.choice(hydrogen_indices)
+                                hydrogens_to_remove.append(hydrogen_idx)
+                            else:
+                                carbon_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'C']
+                                non_ring_carbons = [carbon_idx for carbon_idx in carbon_indices if carbon_idx not in all_ring_atoms]
+                                if non_ring_carbons:
+                                    extra_carbons_to_remove.append(random.choice(non_ring_carbons))
+                    elif len(ring['atom_indices']) == 5:  # Five-membered ring
+                        if len(connected_symbols) == 4:
+                            carbon_with_four_bonds_count += 1
+                            if carbon_with_four_bonds_count > 1:
+                                hydrogen_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'H']
+                                if hydrogen_indices:
+                                    hydrogen_idx = random.choice(hydrogen_indices)
+                                    hydrogens_to_remove.append(hydrogen_idx)
+                                else:
+                                    carbon_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'C']
+                                    non_ring_carbons = [carbon_idx for carbon_idx in carbon_indices if carbon_idx not in all_ring_atoms]
+                                    if non_ring_carbons:
+                                        extra_carbons_to_remove.append(random.choice(non_ring_carbons))
 
-                elif symbol in {'O', 'S'} and len(connected_symbols) == 3:
-                    hydrogen_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'H']
-                    if hydrogen_indices:
-                        hydrogen_idx = random.choice(hydrogen_indices)
-                        hydrogens_to_remove.append(hydrogen_idx)
+                # Rules for O & S
+                elif symbol in {'O', 'S'}:
+                    if len(connected_symbols) == 3:
+                        hydrogen_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'H']
+                        if hydrogen_indices:
+                            hydrogen_idx = random.choice(hydrogen_indices)
+                            hydrogens_to_remove.append(hydrogen_idx)
 
+                # Rules for N
                 elif symbol == 'N':
                     total_bond_order = sum(ring['adjacency_rows'][ring['atom_indices'].index(idx)])
                     hydrogen_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'H']
-                    if len(connected_symbols) == 4 and hydrogen_indices:
+                    if total_bond_order == 4 and hydrogen_indices:
                         hydrogen_idx = random.choice(hydrogen_indices)
                         hydrogens_to_remove.append(hydrogen_idx)
                     elif total_bond_order == 3:
@@ -305,14 +333,19 @@ def identify_hydrogens_to_remove(rings_info: List[Dict], all_ring_atoms: set) ->
                         # Add hydrogen to N in the ring
                         hydrogens_to_add.append((idx, connected_indices.tolist()))
 
-
-                elif symbol in {'B'} and len(connected_symbols) == 2:
-                    # Add hydrogen to N or B in the ring
-                    hydrogens_to_add.append((idx, connected_indices.tolist()))
-
-
+                # Rules for B
+                elif symbol == 'B':
+                    total_bond_order = sum(ring['adjacency_rows'][ring['atom_indices'].index(idx)])
+                    hydrogen_indices = [connected_indices[i] for i, sym in enumerate(connected_symbols) if sym == 'H']
+                    if total_bond_order == 4 and hydrogen_indices:
+                        hydrogen_idx = random.choice(hydrogen_indices)
+                        hydrogens_to_remove.append(hydrogen_idx)
+                    elif total_bond_order == 2:
+                        # Add hydrogen to B in the ring
+                        hydrogens_to_add.append((idx, connected_indices.tolist()))
 
     return hydrogens_to_remove, hydrogens_to_add, extra_carbons_to_remove
+
 
 def add_hydrogens_to_atoms_coords(atoms: List[str], coords: List[Tuple[float, float, float]], hydrogens_to_add: List[int]) -> Tuple[List[str], List[Tuple[float, float, float]]]:
     new_atoms = atoms[:]
@@ -469,14 +502,18 @@ def process_molecule(atoms: List[str], coords: List[Tuple[float, float, float]],
         atoms, coords = remove_atoms_from_atoms_coords(atoms, coords, extra_carbons_to_remove)
         post_process(atoms, coords, output_sdf_filename, output_png_filename)
 
-def check_saturation_with_adjacency_matrix(atoms: List[str], adjacency_matrix: np.ndarray) -> bool:
+def check_saturation_and_print(atoms: List[str], coords: List[Tuple[float, float, float]]) -> bool:
     """
-    Check if the molecule is saturated using the adjacency matrix and print the details of unsaturated atoms if any.
+    Check if the molecule is saturated and print the details of unsaturated atoms if any.
 
     :param atoms: List of atomic symbols.
-    :param adjacency_matrix: Adjacency matrix of the molecule.
+    :param coords: List of atomic coordinates.
     :return: True if the molecule is saturated, False otherwise.
     """
+    bonds, smiles, rdkit_mol, bonds_symbol = geom_to_smi_and_bonds(atoms, coords)
+    num_atoms = len(atoms)
+    adjacency_matrix = construct_adjacency_matrix(bonds, num_atoms)
+
     atom_valences = {
         'C': 4,
         'Si': 4,
@@ -487,11 +524,13 @@ def check_saturation_with_adjacency_matrix(atoms: List[str], adjacency_matrix: n
     }
 
     is_saturated = True
-    for idx, symbol in enumerate(atoms):
+    for atom in rdkit_mol.GetAtoms():
+        symbol = atom.GetSymbol()
+        idx = atom.GetIdx()
         if symbol in atom_valences:
-            total_bond_order = sum(adjacency_matrix[idx])
+            total_bond_order = np.sum(adjacency_matrix[idx])
             if total_bond_order != atom_valences[symbol]:
-                print(f"Unsaturated atom: {symbol} (index {idx}) with total bond order {total_bond_order}")
+                print(f"Unsaturated atom: {symbol} (index {atom.GetIdx()}) with total bond order {total_bond_order}")
                 is_saturated = False
 
     return is_saturated
@@ -515,6 +554,10 @@ if __name__ == "__main__":
     intermediate_png = os.path.join(os.path.dirname(sdf_output_path), 'intermediate_conjugated_molecule.png')
     final_png = os.path.join(os.path.dirname(sdf_output_path), 'final_conjugated_molecule.png')
 
+
+
+
+
     # remove h
     # First process: from input file to intermediate SDF
     process_molecule(atoms, coords, sdf_output_path, intermediate_png, remove_h=True)
@@ -533,7 +576,6 @@ if __name__ == "__main__":
     bonds, smiles, rdkit_mol, bonds_symbol = geom_to_smi_and_bonds(atoms, coords)
     adjacency_matrix = construct_adjacency_matrix(bonds, len(atoms))
 
-    if not check_saturation_with_adjacency_matrix(atoms, adjacency_matrix):
-        print("The molecule is not saturated and will be discarded.")
-    else:
-        print("The molecule is saturated.")
+    atoms, coords = read_sdf_file(sdf_output_path)
+    process_molecule(atoms, coords, sdf_output_path, intermediate_png, remove_h=True)
+
